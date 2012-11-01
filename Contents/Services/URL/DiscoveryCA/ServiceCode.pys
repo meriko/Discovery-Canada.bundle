@@ -1,0 +1,191 @@
+import re
+EPISODE_LOOKUP	= 'http://watch.%s/AJAX/ClipLookup.aspx?episodeid=%s'
+CLIP_LOOKUP	= 'http://watch.%s/AJAX/ClipLookup.aspx?clipid=%s'
+M3U8_LOOKUP = "http://esi.ctv.ca/datafeed/flv/urlgenjs.aspx?vid=%s&formatid=19"
+
+SITES = ['ctv.ca', 'tsn.ca', 'discoverychannel.ca', 'thecomedynetwork.ca', 'bravo.ca', 'spacecast.com', 'fashiontelevision.com']
+
+SOURCE = {
+  "ctv.ca"              : "CTV",
+  "ctv.ca/news"         : "CTV News",
+  "tsn.ca"              : "TSN",
+  "discoverychannel.ca" : "Discovery Channel",
+  "thecomedynetwork.ca" : "Comedy Network",
+  "bravo.ca"            : "Bravo.ca",
+  "bravofact.com"       : "BravoFact!",
+  "spacecast.com"       : "Space",
+  "muchmusic.com"       : "Much Music",
+  "fashiontelevision.com":"Fashion Television"
+}
+
+####################################################################################################
+def NormalizeURL(url):
+
+  return url
+
+####################################################################################################
+def MetadataObjectForURL(url):
+
+  data = HTML.ElementFromURL(url)
+
+  try:
+    title = data.xpath('//meta[@name="title"]')[0].get('content').split(' : ')
+    show_title = title[0]
+    episode_title = title[1]
+    summary = data.xpath('//meta[@name="description"]')[0].get('content')
+
+    # Ensure that the thumb URL is well formed.
+    thumbUrl = data.xpath('//meta[@name="Thumbnail"]')[0].get('content')
+    thumbUrl = thumbUrl.replace(' ', '%20')
+
+    try: season = int(re.search('season\-([0-9]+)', url).group(1))
+    except: season = None
+    try: episode = int(re.search('-ep-([0-9]+)-', url).group(1).lstrip(season))
+    except: episode = None
+
+    # Construct a metadata item
+    mo = EpisodeObject(
+      title = episode_title,
+      show = show_title,
+      season = season,
+      index = episode,
+      summary = summary,
+      thumb = thumbUrl
+    )
+
+  except:
+    network = re.search('watch\.(.+\.c[a-z]{1,2})/.+', url).group(1)
+    clip_re = re.search('clip([0-9]{6})', url)
+
+    if clip_re:
+      clip_id = clip_re.group(1)
+    else:
+      clip_xpath = data.xpath('//meta[@name="EntityId"]')
+
+      if clip_xpath:
+        clip_id = clip_xpath[0].get('content')
+
+        if not clip_id.isdigit():
+          return None
+
+    clip_details = JSON.ObjectFromString(re.search("({EpisodePermalink:.+, IsCanadaOnly:'.'})", HTTP.Request(CLIP_LOOKUP % (network, clip_id)).content).group(1))
+
+    title = clip_details['Title']
+    summary = clip_details['Description']
+    thumb = clip_details['Thumbnail']
+
+    mo = VideoClipObject(
+      title = title,
+      summary = summary,
+      thumb = thumb
+    )
+
+  source_site = re.search("http://watch.(.+\.(ca|com))/.*", url).group(1)
+  source = SOURCE[source_site]
+
+  mo.source_title = source
+  return mo
+
+####################################################################################################
+def MediaObjectsForURL(url):
+
+  # grab from URL and count # of clips (then return enough parts for that)
+  # let's just do 720p for now and let PMS downsize as needed for anything else
+  data = HTML.ElementFromURL(url)
+  clips = []
+#  for clip in data.xpath("//a[@title='Play'][contains(@href,'#clip')]/@href"):
+#   	Log.Debug("getting clip "+clip.split("#clip")[1])
+#   	clips.append(PartObject(key=Callback(PlayVideo, clip=clip.split("#clip")[1])))
+  #Log.Debug("Number of clips: "+ len(clips))
+  clipNum = data.xpath("//a[@title='Play'][contains(@href,'#clip')]/@href")[0]
+  clips.append(PartObject(key=Callback(PlayVideo, clip=clipNum.split("#clip")[1])))
+  
+  return [
+    MediaObject(
+      parts = clips,
+#       container = Container.MP4,
+#       video_resolution = '720',
+#       video_codec = VideoCodec.H264,
+#       audio_codec = AudioCodec.AAC,
+      audio_channels = 2,
+#       optimized_for_streaming = True
+    )
+  ]
+
+
+####################################################################################################
+@indirect
+def PlayVideo(clip):
+  # read our clip file
+  playlist_url = HTTP.Request(M3U8_LOOKUP % clip).content.strip()[17:].split("'")[0]
+  Log.Debug(playlist_url)
+  
+  if playlist_url.startswith('http'):  
+    playlist_url = playlist_url.replace("master.m3u8","index_7_av.m3u8") # instead of reading the master we want index_7_av (720p)
+    #return Redirect(playlist_url)
+    return IndirectResponse(VideoClipObject, key=HTTPLiveStreamURL(playlist_url))
+    #return Redirect(HTTPLiveStreamURL(playlist_url))
+  elif playlist_url.startswith('rtmpe'):
+  	# rtmpe://cp45883.edgefcs.net/ondemand/s_!discovery/2011/03/14/DISC-IA-108-KARLHOME-CLIP01.mp4?auth=dbEaBajd1a.d9azcta5amdhc_d7bXbccCc3-bqKKmV-eS-iYG-vuN4qlFDo&aifp=v001&slist=/s_!discovery/2011/03/14/
+  	try:
+	    host = playlist_url.split("/ondemand")[0]
+	    app = "ondemand?ovpf=2.1.4&" + playlist_url.split("?")[1]
+	    playpath = "mp4:" + playlist_url.split("/ondemand/")[1].split("?")[0].replace(".mp4","")
+	    Log.Debug("raw: "+playlist_url)
+	    Log.Debug("host: "+host)
+	    Log.Debug("app: "+app)
+	    Log.Debug("playpath: "+playpath)
+	    Log.Debug("rtmpdump -r '"+host+"' -a '"+app+"' -y '"+playpath+"' -z -o test.flv")
+	    #return Redirect(RTMPVideoURL(url=host, app=app, clip=playpath))
+	    return IndirectResponse(VideoClipObject, key=RTMPVideoURL(url=host, clip=playpath, app=app))
+	except:
+	  Log.Debug("llnwd rtmpe?")
+  	  # rtmpe://discovery.fcod.llnwd.net/a6290/d1/2011/12/20/DISC-IDIOT-EP-MEET-CLIP01.mp4?s=1351762660&e=1351762960&h=032a78b3a81ceef23e07d19aae3acc11
+  	  host = "rtmpe://discovery.fcod.llnwd.net"
+  	  playpath = "mp4:" + playlist_url.split("/",4)[4]
+  	  args = playpath.split("?")[1]
+  	  app = playlist_url.split("/",4)[3]+"?"+args
+  	  Log.Debug("host: "+host)
+  	  Log.Debug("playpath: "+playpath)
+  	  Log.Debug("args: "+args)
+  	  Log.Debug("rtmpdump -r '"+host+"' -y '"+playpath+"' -a '"+app+"' -z -o test.flv")
+  	  #return Redirect(RTMPVideoURL(url=host, clip=playpath, app=app))
+  	  return IndirectResponse(VideoClipObject, RTMPVideoURL(url=host, clip=playpath, app=app))
+#   video_url = None
+# 
+#   try:
+#     episode_id = HTML.ElementFromURL(url).xpath('//meta[@name="EntityId"]')[0].get('content')
+#     network = re.search('watch\.(.+?)/', url).group(1)
+# 
+#     show = HTTP.Request(EPISODE_LOOKUP %(network, episode_id)).content
+#     expression = re.compile("EpisodePermalink:'(.+?)'", re.MULTILINE)
+#     permalink = expression.search(show).group(1)
+#     level = 0
+#     format = re.search("Format:'(.+?)'", show).group(1)
+# 
+#     if format == 'WMV':
+#       video_url = url + '#Silverlight'
+#     else:
+#       video_url = url + '#Flash'
+#   except:
+#     video_url = url + '#Flash'
+# 
+#   return Redirect(WebVideoURL(video_url))
+
+####################################################################################################
+def TestURLs():
+
+    test_urls = []
+
+    for site in SITES:
+        data = HTML.ElementFromURL('http://watch.%s' % site)
+        try:
+          url = data.xpath('//div[@id="CatalogContainer"]//dl[@class="Item"]//a[@title="Play"]')[0].get('href')
+          if '/comics-on/' in url:
+            continue
+          else:
+            test_urls.append(url)
+        except:
+          pass
+
+    return test_urls
