@@ -2,11 +2,19 @@
 TITLE = "Discovery Channel Canada"
 ART = 'art-discovery.jpg'
 ICON = 'icon-discovery.png'
-CLIP_LOOKUP	= 'http://watch.discoverychannel.ca/AJAX/ClipLookup.aspx?episodeid=%s'
+NAMESPACES = {'ctv': 'http://www.ctv.ca'}
+
+# iOS app video feed, must be parsed manually
+# They say: "This bin contains all the videos that will be picked up by the iOS Discovery app. Show specific clips will be filtered using video/clip title field."
+FEED_URL="http://www.discovery.ca/feeds/videos.aspx" 
+
+# show listings as served for the iOS app (and assuming other things on their site)
+SHOWS_URL="http://www.discovery.ca/feeds/shows.aspx"
+
+
 ###################################################################################################
 def Start():
 	Plugin.AddPrefixHandler("/video/discoveryca", MainMenu, TITLE, ICON, ART)
-
 	Plugin.AddViewGroup("List", viewMode="List", mediaType="items")
 
 	# Setup the default attributes for the ObjectContainer
@@ -20,77 +28,69 @@ def Start():
 	EpisodeObject.thumb = R(ICON)
 	EpisodeObject.art = R(ART)
 
-	#HTTP.CacheTime = CACHE_1HOUR
+	HTTP.CacheTime = CACHE_1HOUR
 
 ####################################################################################################
 def MainMenu():
-	oc = ObjectContainer()
-	data = HTML.ElementFromURL("http://watch.discoverychannel.ca/AJAX/VideoLibraryWithFrame.aspx")
+	return GetShowList()
 
-	for show in data.xpath("//a"):
-		title = show.xpath("./text()")[0].strip()
-		url = show.xpath("./@href")[0]
-		oc.add(DirectoryObject(key=Callback(GetVideoList,url=url,title2=title), title=title, thumb=R(ICON)))
+@route("/video/discoveryca/getshowlist")
+def GetShowList():
+ 	oc = ObjectContainer()
+	data = XML.ObjectFromURL(SHOWS_URL)
+	shows = data.xpath("//item/includeInApp[text()='True']/ancestor::item")
+	for show in shows:
+		try:
+			title=show.xpath("./title/text()", namespaces=NAMESPACES)[0]
+			summary=show.xpath("./ctv:summary/text()", namespaces=NAMESPACES)[0]
+			if Client.Platform == 'MacOSX' or Client.Platform == 'Windows' or Client.Platform == 'Linux':
+				# header/banner style image
+				thumb_url=show.xpath("./ctv:images/ctv:image[1]/url/text()", namespaces=NAMESPACES)[0]
+			else:
+				# square thumb style image
+				thumb_url=show.xpath("./ctv:images/ctv:image[2]/url/text()", namespaces=NAMESPACES)[0]
+
+			showTypeId=show.xpath("./showTypeId/text()")[0]
+			oc.add(
+				DirectoryObject(
+					key=Callback(GetEpisodeList, showTypeId=showTypeId), 
+					title=title,
+					summary=summary, 
+					thumb=Resource.ContentsOfURLWithFallback(url=thumb_url, fallback=ICON)
+				)
+			)
+		except:
+			# no showTypeId means we have no videos for this so let's pass
+			pass
+
 	return oc
 
 ####################################################################################################
-def GetVideoList(url, title2 = "Shows"):
-	oc = ObjectContainer(title2 = title2)
-	data = HTML.ElementFromURL(url)
-	found = False
-	
-	# first try for directly playable clips - ("//a[@title='Play'][contains(@href,'#clip')]/@href")
-	# this will be handled before here and by URL service
-# 	try:
-# 		if data.xpath("//a[@title='Play'][contains(@href,'#clip')]"):
-# 			title = show.xpath("./text()")
-# 			url = show.xpath("./@href")
-# 			oc.add(DirectoryObject(key=Callback(GetVideoList,url=url), title=title))
-# 			
-# 	except: pass
-	
-	# then try for episode titles
-	try:
-		for show in data.xpath("//a[@class='EpisodeTitle']/ancestor::li"):
-			title = show.xpath(".//a[@class='EpisodeTitle']/text()")[0].strip()
-			url = show.xpath(".//a[@class='EpisodeTitle']/@href")[0]
-			try:
-				description = show.xpath(".//dd[@class='Description']/text()")[0]
-			except:
-				description = ""
-			try:
-				thumb_url = show.xpath(".//dd[@class='Thumbnail']//img/@src")[0].split(".jpg")[0]+".jpg" # this is the nicest way to filter out all of their extra stuff for resizing which can be different at times
-			except:
-				thumb_url = ""
-				
-			oc.add(
-				VideoClipObject(
-					url=url, 
-					title=title,
-					summary=description, 
-					thumb = Resource.ContentsOfURLWithFallback(url=thumb_url, fallback=ICON)
+@route("/video/discoveryca/getepisodelist")
+def GetEpisodeList(showTypeId):
+	oc = ObjectContainer()
+	data = XML.ObjectFromURL(FEED_URL)
+	shows = data.xpath('//item/ctv:videoType[text()="%s"]/ancestor::item' % showTypeId, namespaces=NAMESPACES)
+	for ep in shows:
+		try:
+			title = ep.xpath("./title/text()")[0]
+			clip = ep.xpath("./ctv:clipList/item[1]/ctv:id/text()", namespaces=NAMESPACES)[0]
+			url = "http://watch.discoverychannel.ca/#clip"+clip #load the URL with the first clip # (URL service does the rest)
+			thumb_url = ep.xpath("./imgUrl/text()")[0]
+			summary = ep.xpath("./description/text()")[0]
+			originally_available_at = Datetime.ParseDate(ep.xpath("./ctv:startDate/text()", namespaces=NAMESPACES)[0]).date()
+			oc.add(VideoClipObject(
+				title = title,
+				url = url, 
+				thumb = Resource.ContentsOfURLWithFallback(url=thumb_url, fallback=ICON), 
+				summary = summary, 
+				originally_available_at = originally_available_at
 				)
 			)
-			found = True
-		Log.Debug("Found Episode Titles")
+		except:
+			# some shows don't have clipList items set, in that case they are no good to us
+			pass
+	if len(oc) < 1:
+		return MessageContainer("Sorry", "There aren't any videos currently available for this show.")
 
-	except: 
-		Log.Debug("No Episode Titles, found, passing")
-		pass
-	
-	# then try for Season links
-	if not found:
-		Log.Debug("Looking for Seasons")
-		try:
-			for show in data.xpath("//div[@id='Level2']//li/a"):
-				title = show.xpath("./text()")[0].strip()
-				url = show.xpath("./@href")[0]
-				oc.add(DirectoryObject(key=Callback(GetVideoList,url=url,title2=title2+" : "+title), title=title, thumb=R(ICON)))
-				found = True
-		
-		except: pass	
-	
-	# if we land here we got nothin'
-	
-	
 	return oc
