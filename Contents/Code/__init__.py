@@ -12,7 +12,25 @@ FEED_URL="http://www.discovery.ca/feeds/videos.aspx"
 SHOWS_URL="http://www.discovery.ca/feeds/shows.aspx"
 
 
-###################################################################################################
+# CTV Shows List:
+# http://www.ctv.ca/feeds/iOS/ShowsList.aspx
+# data.xpath("//Show/IsMobileEnabled[text()='true']/ancestor::Show")
+# Name, Id, PipeShowTypeId(?)
+
+
+# CTV All Videos:
+# http://esi.ctv.ca/noesi/datafeedrss/bindata.aspx?bid=15291
+# item/ctv:clipList/item/ctv:id (clipId) -> use this to look up m3u8, change master to index_7 , etc ...
+# each <ctv:type>PSERVICE</ctv:type> seems to list a new show.  Not all are mobile enabled so not sure if they will work or not but worth looking into, there are a LOT more shows listed in this huge listing and it would make life easier if we just parse the one file the same as the other CTVGlobeMedia channels use
+
+
+
+# Show Details:
+# http://www.ctv.ca/feeds/iOS/ShowDetails.aspx?id=18564 (not sure which id this is, dunno if we need it or not anyway)
+# 
+
+
+##########################################################################################
 def Start():
 	Plugin.AddPrefixHandler("/video/discoveryca", MainMenu, TITLE, ICON, ART)
 	Plugin.AddViewGroup("List", viewMode="List", mediaType="items")
@@ -30,7 +48,7 @@ def Start():
 
 	HTTP.CacheTime = CACHE_1HOUR
 
-####################################################################################################
+##########################################################################################
 def MainMenu():
 	return GetShowList()
 
@@ -65,7 +83,7 @@ def GetShowList():
 
 	return oc
 
-####################################################################################################
+##########################################################################################
 @route("/video/discoveryca/getepisodelist")
 def GetEpisodeList(showTypeId):
 	oc = ObjectContainer()
