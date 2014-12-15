@@ -172,8 +172,7 @@ def Episodes(show, url, offset = 0):
                         Callback(
                             Episodes,
                             show = show,
-                            show_id = show_id,
-                            art = art,
+                            url = url,
                             offset = offset + VIDEOS_PER_PAGE
                         )
                 )
