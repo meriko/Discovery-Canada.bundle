@@ -1,102 +1,195 @@
+PREFIX = '/video/discoveryca'
+
 TITLE = 'Discovery Channel Canada'
 ART = 'art-default.jpg'
 ICON = 'icon-default.png'
-NAMESPACES = {'ctv': 'http://www.ctv.ca'}
 
-# iOS app video feed, must be parsed manually
-# They say: "This bin contains all the videos that will be picked up by the iOS Discovery app. Show specific clips will be filtered using video/clip title field."
-FEED_URL = 'http://www.discovery.ca/feeds/videos.aspx'
+BASE_URL = 'http://www.discovery.ca'
 
-# show listings as served for the iOS app (and assuming other things on their site)
-SHOWS_URL = 'http://www.discovery.ca/feeds/shows.aspx'
+API_BASE_URL = String.Decode('aHR0cDovL2NhcGkuOWM5bWVkaWEuY29tL2Rlc3RpbmF0aW9ucy9kaXNjb3Zlcnlfd2ViL3BsYXRmb3Jtcy9kZXNrdG9wLw==')
+FEATURED_URL = API_BASE_URL + 'collections/155/contents?&$include=[authentication,broadcastdate,broadcasttime,contentpackages,desc,episode,id,images,media,name,runtime,season,shortdesc,type]&Images.Type=thumbnail'
+POPULAR_URL = API_BASE_URL + 'collections/3/contents?&$include=[authentication,broadcastdate,broadcasttime,contentpackages,desc,episode,id,images,media,name,runtime,season,shortdesc,type]&Images.Type=thumbnail'
+RECENT_URL = API_BASE_URL + 'collections/2/contents?&$include=[authentication,broadcastdate,broadcasttime,contentpackages,desc,episode,id,images,media,name,runtime,season,shortdesc,type]&Images.Type=thumbnail'
+LAST_CHANCE_URL = API_BASE_URL + 'collections/330/contents?&$include=[authentication,broadcastdate,broadcasttime,contentpackages,desc,episode,id,images,media,name,runtime,season,shortdesc,type]&Images.Type=thumbnail'
+SHOWS_URL = API_BASE_URL + 'collections/67/medias?&$include=[authentication,broadcastdate,broadcasttime,contentpackages,desc,episode,id,images,media,name,runtime,season,shortdesc,type]&Images.Type=thumbnail'
+EPISODES_URL = API_BASE_URL + 'medias/%s/contents?$sort=BroadcastDate&$order=desc&$include=[authentication,broadcastdate,broadcasttime,contentpackages,desc,episode,id,images,media,name,runtime,season,shortdesc,type]&Images.Type=thumbnail'
+
+
+VIDEOS_PER_PAGE = 25
 
 ##########################################################################################
 def Start():
 
-	Plugin.AddViewGroup("List", viewMode="List", mediaType="items")
+    # Setup the default attributes for the ObjectContainer
+    ObjectContainer.title1 = TITLE
+    ObjectContainer.art = R(ART)
 
-	# Setup the default attributes for the ObjectContainer
-	ObjectContainer.title1 = TITLE
-	ObjectContainer.view_group = 'List'
-	ObjectContainer.art = R(ART)
+    # Setup the default attributes for the other objects
+    DirectoryObject.thumb = R(ICON)
+    DirectoryObject.art = R(ART)
+    VideoClipObject.thumb = R(ICON)
+    VideoClipObject.art = R(ART)
+    EpisodeObject.thumb = R(ICON)
+    EpisodeObject.art = R(ART)
 
-	# Setup the default attributes for the other objects
-	DirectoryObject.thumb = R(ICON)
-	DirectoryObject.art = R(ART)
-	VideoClipObject.thumb = R(ICON)
-	VideoClipObject.art = R(ART)
-
-	HTTP.CacheTime = CACHE_1HOUR
+    HTTP.CacheTime = CACHE_1HOUR
 
 ##########################################################################################
-@handler('/video/discoveryca', TITLE, art=ART, thumb=ICON)
+@handler(PREFIX, TITLE, art=ART, thumb=ICON)
 def MainMenu():
-
-	return GetShowList()
+    oc = ObjectContainer()
+    
+    if Client.Platform in ('Android'):
+        oc.header = 'Not compatible'
+        oc.message = 'This channel is not compatible with Android clients.'
+    
+    title = 'Featured'
+    oc.add(
+        DirectoryObject(
+            key =
+                Callback(
+                    Episodes,
+                    show = title,
+                    url = FEATURED_URL
+                ),
+            title = title
+        )
+    )
+    
+    title = 'Most Popular'
+    oc.add(
+        DirectoryObject(
+            key =
+                Callback(
+                    Episodes,
+                    show = title,
+                    url = POPULAR_URL
+                ),
+            title = title
+        )
+    )
+    
+    title = 'Most Recent'
+    oc.add(
+        DirectoryObject(
+            key =
+                Callback(
+                    Episodes,
+                    show = title,
+                    url = RECENT_URL
+                ),
+            title = title
+        )
+    )
+    
+    title = 'Last Chance'
+    oc.add(
+        DirectoryObject(
+            key =
+                Callback(
+                    Episodes,
+                    show = title,
+                    url = LAST_CHANCE_URL
+                ),
+            title = title
+        )
+    )
+    
+    title = 'All Shows'
+    oc.add(
+        DirectoryObject(
+            key =
+                Callback(
+                    Shows,
+                    title = title
+                ),
+            title = title
+        )
+    )
+    
+    return oc
+    
+##########################################################################################
+@route(PREFIX + '/Shows')
+def Shows(title):
+    oc = ObjectContainer(title2 = title)
+    
+    data = JSON.ObjectFromURL(SHOWS_URL)
+    
+    for show in data['Items']:
+        oc.add(
+            DirectoryObject(
+                key =
+                    Callback(
+                        Episodes,
+                        show = show['Name'],
+                        url = EPISODES_URL % show['Id']
+                    ),
+                title = show['Name'],
+                summary = show['Desc'],
+                thumb = Callback(GetImage, url = show['Images'][0]['Url'])
+            )
+        )
+        
+    return oc
 
 ##########################################################################################
-@route("/video/discoveryca/getshowlist")
-def GetShowList():
+@route(PREFIX + '/Episodes', offset = int)
+def Episodes(show, url, offset = 0):
+    oc = ObjectContainer(title2 = show)
+    
+    episodes_data = JSON.ObjectFromURL(url)
+    
+    videos = 0
+    for episode in episodes_data['Items'][offset:]:
+        try:
+            if episode['Authentication']['Required']:
+                continue
+        except:
+            pass
 
-	oc = ObjectContainer()
-	data = XML.ObjectFromURL(SHOWS_URL)
-	shows = data.xpath("//item/includeInApp[text()='True']/ancestor::item")
-
-	for show in shows:
-		try:
-			title = show.xpath("./title/text()", namespaces=NAMESPACES)[0]
-			summary = show.xpath("./ctv:summary/text()", namespaces=NAMESPACES)[0]
-
-			if Client.Platform == 'MacOSX' or Client.Platform == 'Windows' or Client.Platform == 'Linux':
-				# header/banner style image
-				thumb_url = show.xpath("./ctv:images/ctv:image[1]/url/text()", namespaces=NAMESPACES)[0]
-			else:
-				# square thumb style image
-				thumb_url = show.xpath("./ctv:images/ctv:image[2]/url/text()", namespaces=NAMESPACES)[0]
-
-			showTypeId = show.xpath("./showTypeId/text()")[0]
-
-			oc.add(DirectoryObject(
-				key = Callback(GetEpisodeList, title=title, showTypeId=showTypeId),
-				title = title,
-				summary = summary,
-				thumb = Resource.ContentsOfURLWithFallback(url=thumb_url, fallback=ICON)
-			))
-		except:
-			# no showTypeId means we have no videos for this so let's pass
-			pass
-
-	return oc
-
+        oc.add(
+            EpisodeObject(
+                url = BASE_URL + '/Video?vid=%s' % episode['Id'],
+                title = episode['Name'],
+                summary = episode['Desc'],
+                show = show,
+                index = episode['Episode'],
+                season = episode['Season']['Number'],
+                thumb = Callback(GetImage, url = episode['Images'][0]['Url']),
+                art = Callback(GetImage, url = episode['Media']['Images'][0]['Url']),
+                originally_available_at = Datetime.ParseDate(episode['BroadcastDate']).date(),
+                duration = int(episode['ContentPackages'][0]['Duration'] * 1000)
+            )
+        )
+        
+        videos = videos + 1
+        
+        if videos >= VIDEOS_PER_PAGE and (len(episodes_data['Items']) - offset > 0):
+            oc.add(
+                NextPageObject(
+                    key =
+                        Callback(
+                            Episodes,
+                            show = show,
+                            show_id = show_id,
+                            art = art,
+                            offset = offset + VIDEOS_PER_PAGE
+                        )
+                )
+            )
+            
+            return oc
+    
+    if len(oc) < 1:
+        return ObjectContainer(header="Sorry", message="There aren't any videos currently available for this show.")
+    else:
+        return oc
+        
 ##########################################################################################
-@route("/video/discoveryca/getepisodelist")
-def GetEpisodeList(title, showTypeId):
-
-	oc = ObjectContainer(title2=title)
-	data = XML.ObjectFromURL(FEED_URL)
-	shows = data.xpath('//item/ctv:videoType[text()="%s"]/ancestor::item' % showTypeId, namespaces=NAMESPACES)
-
-	for ep in shows:
-		try:
-			title = ep.xpath("./title/text()")[0]
-			clip = ep.xpath("./ctv:clipList/item[1]/ctv:id/text()", namespaces=NAMESPACES)[0]
-			url = "http://watch.discoverychannel.ca/#clip"+clip # load the URL with the first clip # (URL service does the rest)
-			thumb_url = ep.xpath("./imgUrl/text()")[0]
-			summary = ep.xpath("./description/text()")[0]
-			originally_available_at = Datetime.ParseDate(ep.xpath("./ctv:startDate/text()", namespaces=NAMESPACES)[0]).date()
-
-			oc.add(VideoClipObject(
-				title = title,
-				url = url, 
-				thumb = Resource.ContentsOfURLWithFallback(url=thumb_url, fallback=ICON), 
-				summary = summary, 
-				originally_available_at = originally_available_at
-			))
-		except:
-			# some shows don't have clipList items set, in that case they are no good to us
-			pass
-
-	if len(oc) < 1:
-		return ObjectContainer(header="Sorry", message="There aren't any videos currently available for this show.")
-
-	return oc
+@route(PREFIX + '/GetImage')
+def GetImage(url):
+    if url.startswith('http'):
+        return HTTP.Request(url, cacheTime = CACHE_1MONTH).content
+    else:
+        return url
