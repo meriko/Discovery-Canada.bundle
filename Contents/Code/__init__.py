@@ -49,7 +49,7 @@ def MainMenu():
             key =
                 Callback(
                     Episodes,
-                    show = title,
+                    title = title,
                     url = FEATURED_URL
                 ),
             title = title
@@ -62,7 +62,7 @@ def MainMenu():
             key =
                 Callback(
                     Episodes,
-                    show = title,
+                    title = title,
                     url = POPULAR_URL
                 ),
             title = title
@@ -75,7 +75,7 @@ def MainMenu():
             key =
                 Callback(
                     Episodes,
-                    show = title,
+                    title = title,
                     url = RECENT_URL
                 ),
             title = title
@@ -88,7 +88,7 @@ def MainMenu():
             key =
                 Callback(
                     Episodes,
-                    show = title,
+                    title = title,
                     url = LAST_CHANCE_URL
                 ),
             title = title
@@ -122,7 +122,7 @@ def Shows(title):
                 key =
                     Callback(
                         Episodes,
-                        show = show['Name'],
+                        title = show['Name'],
                         url = EPISODES_URL % show['Id']
                     ),
                 title = show['Name'],
@@ -135,8 +135,8 @@ def Shows(title):
 
 ##########################################################################################
 @route(PREFIX + '/Episodes', offset = int)
-def Episodes(show, url, offset = 0):
-    oc = ObjectContainer(title2 = show)
+def Episodes(title, url, offset = 0):
+    oc = ObjectContainer(title2 = title)
     
     episodes_data = JSON.ObjectFromURL(url)
     
@@ -153,7 +153,7 @@ def Episodes(show, url, offset = 0):
                 url = BASE_URL + '/Video?vid=%s' % episode['Id'],
                 title = episode['Name'],
                 summary = episode['Desc'],
-                show = show,
+                show = episode['Media']['Name'],
                 index = episode['Episode'],
                 season = episode['Season']['Number'],
                 thumb = Callback(GetImage, url = episode['Images'][0]['Url']),
@@ -171,7 +171,7 @@ def Episodes(show, url, offset = 0):
                     key =
                         Callback(
                             Episodes,
-                            show = show,
+                            title = title,
                             url = url,
                             offset = offset + VIDEOS_PER_PAGE
                         )
