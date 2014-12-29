@@ -1,0 +1,112 @@
+RE_ID = Regex('vid=([0-9]+)')
+NAMESPACES = {'m': 'http://ns.adobe.com/f4m/2.0'}
+
+HTTP.CacheTime = CACHE_1HOUR
+
+####################################################################################################
+def MetadataObjectForURL(url):
+    
+    try:
+        video_id = RE_ID.search(url).groups()[0]
+    except:
+        raise Ex.MediaNotAvailable
+        
+    data = JSON.ObjectFromURL(String.Decode('aHR0cDovL2NhcGkuOWM5bWVkaWEuY29tL2Rlc3RpbmF0aW9ucy9kaXNjb3Zlcnlfd2ViL3BsYXRmb3Jtcy9kZXNrdG9wL2NvbnRlbnRzLyVzPyYkaW5jbHVkZT1bYXV0aGVudGljYXRpb24sYnJvYWRjYXN0ZGF0ZSxicm9hZGNhc3R0aW1lLGNvbnRlbnRwYWNrYWdlcyxkZXNjLGVwaXNvZGUsaWQsaW1hZ2VzLG1lZGlhLG5hbWUscnVudGltZSxzZWFzb24sc2hvcnRkZXNjLHR5cGVdJkltYWdlcy5UeXBlPXRodW1ibmFpbA==') % video_id)
+
+    try:
+        season = int(data['Season']['Number'])
+    except:
+        season = None
+        
+    try:
+        index = int(data['Episode'])
+    except:
+        index = None
+        
+    try:
+        originally_available_at = Datetime.ParseDate(data['BroadcastDate']).date()
+    except:
+        originally_available_at = None
+        
+    try:
+        show = data['Media']['Name']
+    except:
+        show = None
+    
+    try:
+        thumb = data['Images'][0]['Url']
+    except:
+        thumb = None
+        
+    try:
+        duration = int(data['ContentPackages'][0]['Duration'] * 1000)
+    except:
+        duration = None
+        
+    try:
+        art = data['Media']['Images'][0]['Url']
+    except:
+        art = None
+
+    return EpisodeObject(
+        title = data['Name'],
+        summary = data['Desc'],
+        season = season,
+        index = index,
+        originally_available_at = originally_available_at,
+        show = show,
+        thumb = thumb,
+        duration = duration,
+        art = art
+    )
+
+####################################################################################################
+@deferred
+def MediaObjectsForURL(url):
+
+    try:
+        video_id = RE_ID.search(url).groups()[0]
+    except:
+        raise Ex.MediaNotAvailable
+
+    data = JSON.ObjectFromURL(String.Decode('aHR0cDovL2NhcGkuOWM5bWVkaWEuY29tL2Rlc3RpbmF0aW9ucy9kaXNjb3Zlcnlfd2ViL3BsYXRmb3Jtcy9kZXNrdG9wL2NvbnRlbnRzLyVzL2NvbnRlbnRwYWNrYWdlcw==') % video_id)
+    media_id = data['Items'][0]['Id']
+    
+    stacks = JSON.ObjectFromURL(String.Decode('aHR0cDovL2NhcGkuOWM5bWVkaWEuY29tL2Rlc3RpbmF0aW9ucy9kaXNjb3Zlcnlfd2ViL3BsYXRmb3Jtcy9kZXNrdG9wL2NvbnRlbnRzLyVzL2NvbnRlbnRwYWNrYWdlcy8lcy9zdGFja3Mv') % (video_id, media_id))
+    
+    parts = []
+    total_duration = 0
+
+    for part in stacks['Items']:
+        part_id = part['Id']
+        part_duration = int(part['Duration'] * 1000)
+        total_duration = total_duration + part_duration
+        
+        manifest = XML.ElementFromURL(String.Decode('aHR0cDovL2NhcGkuOWM5bWVkaWEuY29tL2Rlc3RpbmF0aW9ucy9kaXNjb3Zlcnlfd2ViL3BsYXRmb3Jtcy9kZXNrdG9wL2NvbnRlbnRzLyVzL2NvbnRlbnRwYWNrYWdlcy8lcy9zdGFja3MvJXMvbWFuaWZlc3QuZjRt') % (video_id, media_id, part_id))
+        
+        hls_url = None
+        highest_bitrate_found = 0
+        
+        for media in manifest.xpath("//m:media", namespaces = NAMESPACES):
+            bitrate = int(media.get('bitrate'))
+
+            if bitrate > highest_bitrate_found:
+                highest_bitrate_found = bitrate
+                hls_url = media.get('href').replace('.f4m', '.m3u8').replace('hds-vod', 'hls-vod')
+            
+        parts.append(
+            PartObject(
+                key = HTTPLiveStreamURL(url = hls_url),
+                duration = part_duration
+            )
+        )
+
+
+    return [
+        MediaObject(
+            video_resolution = 720, 
+            audio_channels   = 2,
+            duration         = total_duration,
+            parts            = parts
+        )
+    ]
