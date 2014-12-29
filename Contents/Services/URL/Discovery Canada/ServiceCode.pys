@@ -1,89 +1,112 @@
-# iOS app video feed, must be parsed manually
-# They say: "This bin contains all the videos that will be picked up by the iOS Discovery app. Show specific clips will be filtered using video/clip title field."
-FEED_URL = 'http://www.discovery.ca/feeds/videos.aspx'
-NAMESPACES = {'ctv': 'http://www.ctv.ca'}
-M3U8_LOOKUP = 'http://esi.ctv.ca/datafeed/flv/urlgenjs.aspx?vid=%s&formatid=19'
+RE_ID = Regex('vid=([0-9]+)')
+NAMESPACES = {'m': 'http://ns.adobe.com/f4m/2.0'}
 
-####################################################################################################
-def NormalizeURL(url):
-
-	return url
+HTTP.CacheTime = CACHE_1HOUR
 
 ####################################################################################################
 def MetadataObjectForURL(url):
+    
+    try:
+        video_id = RE_ID.search(url).groups()[0]
+    except:
+        raise Ex.MediaNotAvailable
+        
+    data = JSON.ObjectFromURL(String.Decode('aHR0cDovL2NhcGkuOWM5bWVkaWEuY29tL2Rlc3RpbmF0aW9ucy9kaXNjb3Zlcnlfd2ViL3BsYXRmb3Jtcy9kZXNrdG9wL2NvbnRlbnRzLyVzPyYkaW5jbHVkZT1bYXV0aGVudGljYXRpb24sYnJvYWRjYXN0ZGF0ZSxicm9hZGNhc3R0aW1lLGNvbnRlbnRwYWNrYWdlcyxkZXNjLGVwaXNvZGUsaWQsaW1hZ2VzLG1lZGlhLG5hbWUscnVudGltZSxzZWFzb24sc2hvcnRkZXNjLHR5cGVdJkltYWdlcy5UeXBlPXRodW1ibmFpbA==') % video_id)
 
-	# read the main iOS data
-	data = XML.ObjectFromURL(FEED_URL)
-	clipId = url.split("#")[1].replace("clip","")
-	video = data.xpath("//item/ctv:clipList/item/ctv:id[text()=%s]/ancestor::item" % (clipId),namespaces=NAMESPACES)[0]
-	title = video.xpath("./title/text()",namespaces=NAMESPACES)[0]
-	summary = video.xpath("./description",namespaces=NAMESPACES)[0]
-	thumb_url = video.xpath("./ctv:imageList/item/link",namespaces=NAMESPACES)[0]
+    try:
+        season = int(data['Season']['Number'])
+    except:
+        season = None
+        
+    try:
+        index = int(data['Episode'])
+    except:
+        index = None
+        
+    try:
+        originally_available_at = Datetime.ParseDate(data['BroadcastDate']).date()
+    except:
+        originally_available_at = None
+        
+    try:
+        show = data['Media']['Name']
+    except:
+        show = None
+    
+    try:
+        thumb = data['Images'][0]['Url']
+    except:
+        thumb = None
+        
+    try:
+        duration = int(data['ContentPackages'][0]['Duration'] * 1000)
+    except:
+        duration = None
+        
+    try:
+        art = data['Media']['Images'][0]['Url']
+    except:
+        art = None
 
-	return VideoClipObject(
-		title = title,
-		summary = summary,
-		thumb = Resource.ContentsOfURLWithFallback(url=thumb_url, fallback='icon-default.png')
-	)
+    return EpisodeObject(
+        title = data['Name'],
+        summary = data['Desc'],
+        season = season,
+        index = index,
+        originally_available_at = originally_available_at,
+        show = show,
+        thumb = thumb,
+        duration = duration,
+        art = art
+    )
 
 ####################################################################################################
+@deferred
 def MediaObjectsForURL(url):
 
-	# read the main iOS data
-	data = XML.ObjectFromURL(FEED_URL)
-	clipId = url.split("#")[1].replace("clip","")
+    try:
+        video_id = RE_ID.search(url).groups()[0]
+    except:
+        raise Ex.MediaNotAvailable
 
-	# find the node with our passed clip, then grab all the clips that are listed for that video
-	allClips = data.xpath("//item/ctv:clipList/item/ctv:id[text()=%s]/ancestor::ctv:clipList/item/ctv:id" % (clipId),namespaces=NAMESPACES)
-	clips = []
+    data = JSON.ObjectFromURL(String.Decode('aHR0cDovL2NhcGkuOWM5bWVkaWEuY29tL2Rlc3RpbmF0aW9ucy9kaXNjb3Zlcnlfd2ViL3BsYXRmb3Jtcy9kZXNrdG9wL2NvbnRlbnRzLyVzL2NvbnRlbnRwYWNrYWdlcw==') % video_id)
+    media_id = data['Items'][0]['Id']
+    
+    stacks = JSON.ObjectFromURL(String.Decode('aHR0cDovL2NhcGkuOWM5bWVkaWEuY29tL2Rlc3RpbmF0aW9ucy9kaXNjb3Zlcnlfd2ViL3BsYXRmb3Jtcy9kZXNrdG9wL2NvbnRlbnRzLyVzL2NvbnRlbnRwYWNrYWdlcy8lcy9zdGFja3Mv') % (video_id, media_id))
+    
+    parts = []
+    total_duration = 0
 
-	for clip in allClips:
-		clips.append(PartObject(key=HTTPLiveStreamURL(Callback(PlayVideo, clip=str(clip)))))
+    for part in stacks['Items']:
+        part_id = part['Id']
+        part_duration = int(part['Duration'] * 1000)
+        total_duration = total_duration + part_duration
+        
+        manifest = XML.ElementFromURL(String.Decode('aHR0cDovL2NhcGkuOWM5bWVkaWEuY29tL2Rlc3RpbmF0aW9ucy9kaXNjb3Zlcnlfd2ViL3BsYXRmb3Jtcy9kZXNrdG9wL2NvbnRlbnRzLyVzL2NvbnRlbnRwYWNrYWdlcy8lcy9zdGFja3MvJXMvbWFuaWZlc3QuZjRt') % (video_id, media_id, part_id))
+        
+        hls_url = None
+        highest_bitrate_found = 0
+        
+        for media in manifest.xpath("//m:media", namespaces = NAMESPACES):
+            bitrate = int(media.get('bitrate'))
 
-	return [
-		MediaObject(
-			parts = clips,
-			container = 'mpegts',
-			video_resolution = '720',
-			video_codec = VideoCodec.H264,
-			audio_codec = AudioCodec.AAC,
-			audio_channels = 2,
-			optimized_for_streaming = True
-		)
-	]
+            if bitrate > highest_bitrate_found:
+                highest_bitrate_found = bitrate
+                hls_url = media.get('href').replace('.f4m', '.m3u8').replace('hds-vod', 'hls-vod')
+            
+        parts.append(
+            PartObject(
+                key = HTTPLiveStreamURL(url = hls_url),
+                duration = part_duration
+            )
+        )
 
-####################################################################################################
-def PlayVideo(clip):
 
-	playlist = HTTP.Request(M3U8_LOOKUP % clip).content
-
-	if 'geoblock.flv' in playlist:
-		raise Ex.MediaGeoblocked
-
-	playlist_url = playlist.strip()[17:].split("'")[0]
-
-	if playlist_url.startswith('http'):
-		playlist_url = playlist_url.replace("master.m3u8","index_7_av.m3u8") # instead of reading the master we want index_7_av (720p)
-		return Redirect(playlist_url)
-
-	raise Ex.MediaNotAvailable
-
-####################################################################################################
-def TestURLs():
-
-	test_urls = []
-	data = XML.ObjectFromURL(FEED_URL)
-	shows = data.xpath('//item', namespaces=NAMESPACES)
-
-	for ep in shows:
-		try:
-			clipId = ep.xpath("./ctv:clipList/item[1]/ctv:id/text()", namespaces=NAMESPACES)[0]
-			url = "http://watch.discoverychannel.ca/#clip"+clipId
-			test_urls.append(url)
-		except:
-			continue
-
-		if len(test_urls) >= 3:
-			break
-
-	return test_urls
+    return [
+        MediaObject(
+            video_resolution = 720, 
+            audio_channels   = 2,
+            duration         = total_duration,
+            parts            = parts
+        )
+    ]
